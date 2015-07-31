@@ -1,9 +1,14 @@
-import urllib2
+from __future__ import print_function
 import simplejson
 import time
 import contextlib
-from collections import defaultdict
+import sys
+if sys.version_info < (3,):
+    import urllib2
+else:
+    import urllib.request as urllib2
 
+from collections import defaultdict
 
 class UnexpectedResponse(Exception):
     pass
@@ -16,21 +21,22 @@ CACHE_TIMEOUT = 120
 """Seconds to store an item in memory for, before it needs refreshing"""
 
 
-def get_accessor(username=None, password=None, rally_base_url=None):
+def get_accessor(username=None, password=None, rally_base_url=None, apikey=None):
     global ACCESSOR
     if not ACCESSOR:
-        if not (username and password and rally_base_url):
+        if not ((username and password and rally_base_url) or (rally_base_url and apikey)):
             raise Exception('RallyAccessor must be established'
-                            ' before accessing without username, password and'
-                            'rally_base_url\n'
+                            ' before accessing without username, password and '
+                            'rally_base_url\n OR a rally_base_url and an apikey'
                             'Try instantiating a client object first.')
-        ACCESSOR = RallyAccessor(username, password, rally_base_url)
+
+        ACCESSOR = RallyAccessor(username=username, password=password, base_url=rally_base_url, apikey=apikey)
     return ACCESSOR
 
 
 class RallyAccessor(object):
 
-    def __init__(self, username, password, base_url):
+    def __init__(self, username, password, base_url, apikey):
         """
         Set up access to rally with the given url and credentials.
 
@@ -45,14 +51,20 @@ class RallyAccessor(object):
                 * https://rally1.rallydev.com/
                 * https://community.rallydev.com/
                 * https://trial.rallydev.com/
+
+        :param apikey:
+            Optional in case of username / password login. Second authentication method.
+            You can create an APIKEY on the following Rally page:
+                * https://rally1.rallydev.com/login/accounts/index.html#/keys
         """
         self.base_url = base_url
-        self.api_url = '{0}slm/webservice/1.29/'.format(self.base_url)
+        self.api_url = '{0}slm/webservice/v2.0/'.format(self.base_url)
         password_manager = urllib2.HTTPPasswordMgrWithDefaultRealm()
         password_manager.add_password(
                 None, base_url, username, password
         )
         self.auth_handler = urllib2.HTTPBasicAuthHandler(password_manager)
+        self.apikey = apikey
         self.cache_timeouts = {}
         self.default_cache_timeout = CACHE_TIMEOUT
 
@@ -195,19 +207,22 @@ class RallyAccessor(object):
         else:
             full_url = url
 
-        print full_url
-
         if method == 'GET':
             data = self.get_from_cache(full_url)
             if not data:
-                request = urllib2.Request(full_url)
+                if self.apikey:
+                    header_data = {'zsessionid': self.apikey}
+                request = urllib2.Request(full_url, headers=header_data)
                 data = self._get_json_response(request)
                 self.set_to_cache(full_url, data)
             return data
         elif method == 'POST':
             encoded_data = simplejson.dumps(data)
+            header_data = {'Content-Type': 'application/json'}
+            if self.apikey:
+                header_data.zsessionid = self.apikey
             request = urllib2.Request(full_url, encoded_data,
-                                 {'Content-Type': 'application/json'})
+                                 header_data)
         elif method == 'DELETE':
             request = urllib2.Request(full_url)
             request.get_method = lambda: 'DELETE'
